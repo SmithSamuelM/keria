@@ -86,7 +86,7 @@ class Anchorer(doing.DoDoer):
 
         return True
 
-    def escrowDo(self, tymth, tock=1.0):
+    def escrowDo(self, tymth, tock=1.0, **kwa):
         """ Process escrows of group multisig identifiers waiting to be compeleted.
 
         Steps involve:
@@ -178,10 +178,10 @@ class Anchorer(doing.DoDoer):
 
                 self.hby.db.dpwe.rem(keys=(pre, said))
                 self.hby.db.dune.pin(keys=(srdr.pre, srdr.said), val=srdr)
-                
+
 class DelegatorEnd:
     """ Resource class for for handling delegator events"""
-    
+
     def __init__(self, identifierResource) -> None:
         """
 
@@ -207,13 +207,13 @@ class DelegatorEnd:
 
         if hab is None:
             raise falcon.HTTPNotFound(title=f"No AID with name or prefix {name} found")
-        
+
         body = req.get_media()
         anc = httping.getRequiredParam(body, "ixn")
-        
+
         if not agent.hby.db.findAnchoringSealEvent(hab.pre, seal=anc):
             op = self.identifierResource.interact(agent, name, body)
-        
+
         # successful approval returns the delegatee prefix
         teepre = approveDelegation(hab, anc)
         adop = agent.monitor.submit(anc["d"], longrunning.OpTypes.delegation,
@@ -226,10 +226,10 @@ class DelegatorEnd:
             return rep
         except (kering.AuthError, ValueError) as e:
             raise falcon.HTTPBadRequest(description=e.args[0])
-    
+
 def approveDelegation(hab, anc) -> str:
     serder = serdering.SerderKERI(sad=anc)
-    
+
     teepre = anc['a'][0]['i']
     teesaid = anc['a'][0]['d']
 
@@ -243,6 +243,6 @@ def approveDelegation(hab, anc) -> str:
             # adding the authorize event seal will allow the dip to be processed
             # and added to the delegator kever
             hab.db.setAes(dgkey, couple)  # authorizer event seal (delegator/issuer)
-        
+
     return teepre
     # raise falcon.HTTPBadRequest(title=f"No delegables found for delegator {hab.pre} to approve delegatee {teepre}")

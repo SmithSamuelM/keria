@@ -35,7 +35,7 @@ class GracefulShutdownDoer(doing.Doer):
         for caid in agents:
             self.agency.shut(self.agency.agents[caid])
 
-    def enter(self):
+    def enter(self, **kwa):
         """
         Sets up signal handlers.
         Lifecycle method called once when the Doist running this Doer enters the context for this Doer.

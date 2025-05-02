@@ -583,7 +583,7 @@ class ParserDoer(doing.Doer):
         self.tock = tock
         super(ParserDoer, self).__init__(tock=self.tock)
 
-    def recur(self, tyme=None):
+    def recur(self, tyme=None, **kwa):
         if self.parser.ims:
             logger.info("Agent %s received:\n%s\n...\n", self.kvy, self.parser.ims[:1024])
         done = yield from self.parser.parsator()  # process messages continuously
@@ -598,7 +598,7 @@ class Witnesser(doing.Doer):
         self.tock = tock
         super(Witnesser, self).__init__(tock=self.tock)
 
-    def recur(self, tyme=None):
+    def recur(self, tyme=None, **kwa):
         while True:
             if self.witners:
                 msg = self.witners.popleft()
@@ -624,7 +624,7 @@ class Delegator(doing.Doer):
         self.tock = tock
         super(Delegator, self).__init__(tock=self.tock)
 
-    def recur(self, tyme=None):
+    def recur(self, tyme=None, **kwa):
         if self.anchors:
             msg = self.anchors.popleft()
             sn = msg["sn"] if "sn" in msg else None
@@ -934,14 +934,14 @@ class Escrower(doing.Doer):
         self.registrar.processEscrows()
         self.credentialer.processEscrows()
         return False
-    
+
 class Releaser(doing.Doer):
     def __init__(self, agency: Agency, releaseTimeout=86400):
         """ Check open agents and close if idle for more than releaseTimeout seconds
         Parameters:
             agency (Agency): KERIA agent manager
             releaseTimeout (int): Timeout in seconds
- 
+
         """
         self.tock = 60.0
         self.agents = agency.agents
@@ -950,7 +950,7 @@ class Releaser(doing.Doer):
 
         super(Releaser, self).__init__(tock=self.tock)
 
-    def recur(self, tyme=None):
+    def recur(self, tyme=None, **kwa):
         while True:
             idle = []
             for caid in self.agents:
