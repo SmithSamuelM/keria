@@ -161,7 +161,7 @@ def test_registry_end(helpers, seeder):
         body = dict(name="test", alias="test", vcp=regser.ked, ixn=serder.ked, sigs=sigers)
         result = client.simulate_post(path="/identifiers/bad_test/registries", body=json.dumps(body).encode("utf-8"))
         assert result.status == falcon.HTTP_404
-        assert result.json == {'description': 'alias is not a valid reference to an identifier',
+        assert result.json == {'description': 'bad_test is not a valid reference to an identifier',
                               'title': '404 Not Found'}
 
         # Try with bad identifier name
@@ -199,7 +199,7 @@ def test_registry_end(helpers, seeder):
 
         result = client.simulate_get(path="/identifiers/not_test/registries")
         assert result.status == falcon.HTTP_404
-        assert result.json == {'description': 'name is not a valid reference to an identifier', 'title': '404 Not Found'}
+        assert result.json == {'description': 'not_test is not a valid reference to an identifier', 'title': '404 Not Found'}
 
         # Test Operation Resource
         result = client.simulate_get(path=f"/operations/{op['name']}")
@@ -223,7 +223,8 @@ def test_registry_end(helpers, seeder):
 
 
 def test_issue_credential(helpers, seeder):
-    with helpers.openKeria() as (agency, agent, app, client):
+    with (helpers.openKeria() as (agency, agent, app, client),
+          helpers.openKeria() as (agency1, agent1, app1, client1)):
         idResEnd = aiding.IdentifierResourceEnd()
         app.add_route("/identifiers/{name}", idResEnd)
         registryEnd = credentialing.RegistryCollectionEnd(idResEnd)
@@ -238,6 +239,7 @@ def test_issue_credential(helpers, seeder):
         app.add_route("/identifiers/{name}/endroles", endRolesEnd)
 
         seeder.seedSchema(agent.hby.db)
+        seeder.seedSchema(agent1.hby.db)
 
         # create the server that will receive the credential issuance messages
         serverDoer = helpers.server(agency)
@@ -291,9 +293,9 @@ def test_issue_credential(helpers, seeder):
         
         result = client.simulate_post(path="/identifiers/badname/credentials", body=json.dumps(body).encode("utf-8"))
         assert result.status_code == 404
-        assert result.json == {'description': "name is not a valid reference to an identifier",
+        assert result.json == {'description': "badname is not a valid reference to an identifier",
                                'title': '404 Not Found'}
-        
+
         result = client.simulate_post(path="/identifiers/issuer/credentials", body=json.dumps(body).encode("utf-8"))
         op = result.json
 
@@ -309,6 +311,32 @@ def test_issue_credential(helpers, seeder):
         result = client.simulate_post(path="/identifiers/issuer/credentials", body=json.dumps(body).encode("utf-8"))
         assert result.status_code == 400
 
+        # Try to load into another agent after TEL query without IPEX
+        agent1.parser.parse(ims=agent.hby.habByName("issuer").replay())
+        assert iaid in agent1.hby.kevers
+
+        agent1.parser.parse(ims=agent.rgy.reger.cloneTvtAt(registry["regk"]))
+        assert registry["regk"] in agent1.rgy.tevers
+
+        agent1.parser.parse(ims=agent.rgy.reger.cloneTvtAt(creder.said))
+        assert agent1.rgy.tevers[registry["regk"]].vcSn(creder.said) is not None
+
+        credVerifyEnd = credentialing.CredentialVerificationCollectionEnd()
+        app1.add_route("/credentials/verify", credVerifyEnd)
+
+        body = dict(acdc=creder.sad, iss=regser.ked)  # still has changed LEI
+        result = client1.simulate_post(path="/credentials/verify", body=json.dumps(body).encode("utf-8"))
+        assert result.status_code == 400
+
+        body["acdc"]["a"]["LEI"] = "254900DA0GOGCFVWB618"  # change back
+        result = client1.simulate_post(path="/credentials/verify", body=json.dumps(body).encode("utf-8"))
+        assert result.status_code == 202
+
+        deeds = doist.enter(doers=[agent1])
+        while not agent1.rgy.reger.creds.get(keys=(creder.said,)):
+            doist.recur(deeds=deeds)
+
+
 def test_credentialing_ends(helpers, seeder):
     salt = b'0123456789abcdef'
 
@@ -322,6 +350,8 @@ def test_credentialing_ends(helpers, seeder):
         app.add_route("/credentials/query", credResEnd)
         credResEnd = credentialing.CredentialResourceEnd()
         app.add_route("/credentials/{said}", credResEnd)
+        credentialRegistryResEnd = credentialing.CredentialRegistryResourceEnd()
+        app.add_route("/registries/{ri}/{vci}", credentialRegistryResEnd)
 
         assert hab.pre == "EIqTaQiZw73plMOq8pqHTi9BDgDrrE7iE9v2XfN2Izze"
 
@@ -430,10 +460,63 @@ def test_credentialing_ends(helpers, seeder):
         assert res.headers['content-type'] == "application/json"
         assert res.json['sad']['d'] == saids[0]
 
+        res = client.simulate_get(f"/credentials/EDqDrGuzned0HOKFTLqd7m7O7WGE5zYIOHrlCq4EnWxy")
+        assert res.status_code == 404
+        assert res.json == {'description': f"credential for said EDqDrGuzned0HOKFTLqd7m7O7WGE5zYIOHrlCq4EnWxy not found.",
+                            'title': '404 Not Found'}
+
         headers = {"Accept": "application/json+cesr"}
         res = client.simulate_get(f"/credentials/{saids[0]}", headers=headers)
         assert res.status_code == 200
         assert res.headers['content-type'] == "application/json+cesr"
+
+        res = client.simulate_get(f"/registries/{registry.regk}/{saids[0]}")
+        assert res.status_code == 200
+        assert res.json == {'vn': [1, 0], 'i': 'EIO9uC3K6MvyjFD-RB3RYW3dfL49kCyz3OPqv3gi1dek', 's': '0',
+                            'd': 'EBVaw6pCqfMIiZGkA6qevzRUGsxTRuZXxl6YG1neeCGF', 'ri': 'EACehJRd0wfteUAJgaTTJjMSaQqWvzeeHqAMMqxuqxU4',
+                            'ra': {}, 'a': {'s': 3, 'd': 'EO_rknKiU14E0I-rN6yttRE0OSDKaQpVSozAcghjS4dj'},
+                            'dt': '2021-06-27T21:26:21.233257+00:00', 'et': 'iss'}
+
+        res = client.simulate_get(f"/registries/{registry.regk}/EDqDrGuzned0HOKFTLqd7m7O7WGE5zYIOHrlCq4EnWxy")
+        assert res.status_code == 404
+        assert res.json == {'description': f"credential EDqDrGuzned0HOKFTLqd7m7O7WGE5zYIOHrlCq4EnWxy not found in registry EACehJRd0wfteUAJgaTTJjMSaQqWvzeeHqAMMqxuqxU4",
+                            'title': '404 Not Found'}
+
+        res = client.simulate_get(f"/registries/EBVaw6pCqfMIiZGkA6qevzRUGsxTRuZXxl6YG1neeCGF/{saids[0]}")
+        assert res.status_code == 404
+        assert res.json == {'description': f"registry EBVaw6pCqfMIiZGkA6qevzRUGsxTRuZXxl6YG1neeCGF not found",
+                            'title': '404 Not Found'}
+
+        res = client.simulate_delete(f"/credentials/doesnotexist")
+        assert res.status_code == 404
+        assert res.json == {'description': f"credential for said doesnotexist not found.",
+                            'title': '404 Not Found'}
+
+        res = client.simulate_delete(f"/credentials/{saids[0]}")
+        assert res.status_code == 204
+
+        res = client.simulate_get(f"/credentials/{saids[0]}")
+        assert res.status_code == 404
+        assert res.json == {'description': f"credential for said EIO9uC3K6MvyjFD-RB3RYW3dfL49kCyz3OPqv3gi1dek not found.",
+                            'title': '404 Not Found'}
+
+        res = client.simulate_post(f"/credentials/query")
+        assert res.status_code == 200
+        assert len(res.json) == 4
+
+        # Query using specific filter to check indexes
+        body = json.dumps({'filter': {'-a-LEI': "984500E5DEFDBQ1O9038"}}).encode("utf-8")
+        res = client.simulate_post(f"/credentials/query", body=body)
+        assert res.status_code == 200
+        assert len(res.json) == 0
+
+        # Check db directly to make sure all indices are gone too (GET endpoints don't cover all indices)
+        assert agent.rgy.reger.creds.get(keys=saids[0]) is None
+        assert agent.rgy.reger.cancs.get(keys=saids[0]) is None
+        assert agent.rgy.reger.saved.get(keys=saids[0]) is None
+        assert agent.rgy.reger.issus.cnt(keys=hab.pre) == 4
+        assert agent.rgy.reger.schms.cnt(keys="EFgnk_c08WmZGgv9_mpldibRuqFMTQN-rAgtD-TCOwbs") == 1
+        assert agent.rgy.reger.subjs.cnt(keys=issuee) == 4
 
 
 def test_revoke_credential(helpers, seeder):
@@ -456,6 +539,8 @@ def test_revoke_credential(helpers, seeder):
         app.add_route("/identifiers/{name}/credentials/{said}", credResDelEnd)
         credResEnd = credentialing.CredentialQueryCollectionEnd()
         app.add_route("/credentials/query", credResEnd)
+        credentialRegistryResEnd = credentialing.CredentialRegistryResourceEnd()
+        app.add_route("/registries/{ri}/{vci}", credentialRegistryResEnd)
 
         seeder.seedSchema(agent.hby.db)
 
@@ -511,7 +596,7 @@ def test_revoke_credential(helpers, seeder):
         
         result = client.simulate_post(path="/identifiers/badname/credentials", body=json.dumps(body).encode("utf-8"))
         assert result.status_code == 404
-        assert result.json == {'description': "name is not a valid reference to an identifier",
+        assert result.json == {'description': "badname is not a valid reference to an identifier",
                                'title': '404 Not Found'}
         
         result = client.simulate_post(path="/identifiers/issuer/credentials", body=json.dumps(body).encode("utf-8"))
@@ -547,7 +632,7 @@ def test_revoke_credential(helpers, seeder):
             sigs=sigers)
         res = client.simulate_delete(path=f"/identifiers/badname/credentials/{creder.said}", body=json.dumps(body).encode("utf-8"))
         assert res.status_code == 404
-        assert res.json == {'description': "name is not a valid reference to an identifier",
+        assert res.json == {'description': "badname is not a valid reference to an identifier",
                             'title': '404 Not Found'}
         
         res = client.simulate_delete(path=f"/identifiers/issuer/credentials/{regser.said}", body=json.dumps(body).encode("utf-8"))
@@ -602,3 +687,8 @@ def test_revoke_credential(helpers, seeder):
         assert len(res.json) == 1
         assert res.json[0]['sad']['d'] == creder.said
         assert res.json[0]['status']['s'] == "1"
+
+        res = client.simulate_get(f"/registries/{registry["regk"]}/{creder.said}")
+        assert res.status_code == 200
+        assert res.json["s"] == "1"
+        assert res.json["et"] == "rev"

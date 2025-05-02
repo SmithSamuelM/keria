@@ -34,7 +34,10 @@ def loadEnds(app, identifierResource):
 
     credentialCollectionEnd = CredentialCollectionEnd(identifierResource)
     app.add_route("/identifiers/{name}/credentials", credentialCollectionEnd)
-    
+
+    credentialRegistryResEnd = CredentialRegistryResourceEnd()
+    app.add_route("/registries/{ri}/{vci}", credentialRegistryResEnd)
+
     credentialResourceEnd = CredentialResourceEnd()
     app.add_route("/credentials/{said}", credentialResourceEnd)
     credentialResourceDelEnd = CredentialResourceDeleteEnd(identifierResource)
@@ -42,6 +45,9 @@ def loadEnds(app, identifierResource):
 
     queryCollectionEnd = CredentialQueryCollectionEnd()
     app.add_route("/credentials/query", queryCollectionEnd)
+
+    credentialVerificationEnd = CredentialVerificationCollectionEnd()
+    app.add_route("/credentials/verify", credentialVerificationEnd)
 
 
 class RegistryCollectionEnd:
@@ -66,7 +72,7 @@ class RegistryCollectionEnd:
         Parameters:
             req: falcon.Request HTTP request
             rep: falcon.Response HTTP response
-            name (str): human readable name for AID
+            name (str): human readable name or prefix for AID
 
         ---
         summary: List credential issuance and revocation registies
@@ -80,9 +86,9 @@ class RegistryCollectionEnd:
         """
         agent = req.context.agent
 
-        hab = agent.hby.habByName(name)
+        hab = agent.hby.habs[name] if name in agent.hby.habs else agent.hby.habByName(name)
         if hab is None:
-            raise falcon.HTTPNotFound(description="name is not a valid reference to an identifier")
+            raise falcon.HTTPNotFound(description=f"{name} is not a valid reference to an identifier")
 
         res = []
         for name, registry in agent.rgy.regs.items():
@@ -108,7 +114,7 @@ class RegistryCollectionEnd:
         Parameters:
             req: falcon.Request HTTP request
             rep: falcon.Response HTTP response
-            name (str): AID of Hab to load credentials for
+            name (str): human readable name or prefix of Hab to load credentials for
 
         ---
         summary: Request to create a credential issuance and revocation registry
@@ -163,9 +169,9 @@ class RegistryCollectionEnd:
         ked = httping.getRequiredParam(body, "ixn")
         ixn = serdering.SerderKERI(sad=ked)
 
-        hab = agent.hby.habByName(name)
+        hab = agent.hby.habs[name] if name in agent.hby.habs else agent.hby.habByName(name)
         if hab is None:
-            raise falcon.HTTPNotFound(description="alias is not a valid reference to an identifier")
+            raise falcon.HTTPNotFound(description=f"{name} is not a valid reference to an identifier")
 
         if agent.rgy.registryByName(name=rname) is not None:
             raise falcon.HTTPBadRequest(description=f"registry name {rname} already in use")
@@ -183,8 +189,8 @@ class RegistryCollectionEnd:
         seqner = coring.Seqner(sn=ixn.sn)
         prefixer = coring.Prefixer(qb64=ixn.pre)
         agent.registrar.incept(hab, registry, prefixer=prefixer, seqner=seqner, saider=coring.Saider(qb64=ixn.said))
-        op = agent.monitor.submit(hab.kever.prefixer.qb64, longrunning.OpTypes.registry,
-                                  metadata=dict(anchor=anchor, depends=op))
+        op = agent.monitor.submit(registry.regk, longrunning.OpTypes.registry,
+                                  metadata=dict(pre=hab.kever.prefixer.qb64, anchor=anchor, depends=op))
 
         rep.status = falcon.HTTP_202
         rep.data = op.to_json().encode("utf-8")
@@ -199,7 +205,7 @@ class RegistryResourceEnd:
         Parameters:
             req: falcon.Request HTTP request
             rep: falcon.Response HTTP response
-            name (str): human readable name for AID
+            name (str): human readable name or prefix for AID
             registryName(str): human readable name for registry
 
         ---
@@ -228,7 +234,7 @@ class RegistryResourceEnd:
         """
         agent = req.context.agent
 
-        hab = agent.hby.habByName(name)
+        hab = agent.hby.habs[name] if name in agent.hby.habs else agent.hby.habByName(name)
         if hab is None:
             raise falcon.HTTPNotFound(description=f"{name} is not a valid reference to an identifier")
 
@@ -256,7 +262,7 @@ class RegistryResourceEnd:
         Parameters:
             req: falcon.Request HTTP request
             rep: falcon.Response HTTP response
-            name (str): human readable name for AID
+            name (str): human readable name or prefix for AID
             registryName(str): human readable name for registry or its SAID
 
         ---
@@ -296,7 +302,7 @@ class RegistryResourceEnd:
         """
         agent = req.context.agent
 
-        hab = agent.hby.habByName(name)
+        hab = agent.hby.habs[name] if name in agent.hby.habs else agent.hby.habByName(name)
         if hab is None:
             raise falcon.HTTPNotFound(description=f"{name} is not a valid reference to an identifier")
 
@@ -407,6 +413,69 @@ class SchemaCollectionEnd:
         rep.data = json.dumps(data).encode("utf-8")
 
 
+class CredentialVerificationCollectionEnd:
+    @staticmethod
+    def on_post(req, rep):
+        """ Verify credential endpoint (no IPEX)
+
+        Parameters:
+            req: falcon.Request HTTP request
+            rep: falcon.Response HTTP response
+
+        ---
+        summary: Verify a credential without IPEX
+        description: Verify a credential without using IPEX (TEL should be updated separately)
+        tags:
+           - Credentials
+        requestBody:
+            required: true
+            content:
+              application/json:
+                schema:
+                  type: object
+                  required:
+                    - acdc
+                    - iss
+                  properties:
+                    acdc:
+                      type: object
+                      description: KED of ACDC
+                    iss:
+                      type: object
+                      description: KED of issuing event in VC TEL
+        responses:
+           202:
+              description: Credential accepted for parsing
+              content:
+                  application/json:
+                    schema:
+                        description: long running operation of credential processing
+                        type: object
+           404:
+              description: Malformed ACDC or iss event
+        """
+        agent = req.context.agent
+        body = req.get_media()
+
+        try:
+            creder = serdering.SerderACDC(sad=httping.getRequiredParam(body, "acdc"))
+            iserder = serdering.SerderKERI(sad=httping.getRequiredParam(body, "iss"))
+        except (kering.ValidationError, json.decoder.JSONDecodeError) as e:
+            rep.status = falcon.HTTP_400
+            rep.text = e.args[0]
+            return
+
+        prefixer = coring.Prefixer(qb64=iserder.pre)
+        seqner = coring.Seqner(sn=iserder.sn)
+        saider = coring.Saider(qb64=iserder.said)
+
+        agent.parser.ims.extend(signing.serialize(creder, prefixer, seqner, saider))
+        op = agent.monitor.submit(creder.said, longrunning.OpTypes.credential,
+                                  metadata=dict(ced=creder.sad))
+        rep.status = falcon.HTTP_202
+        rep.data = op.to_json().encode("utf-8")
+
+
 class CredentialQueryCollectionEnd:
     """ This class provides a collection endpoint for creating credential queries.
 
@@ -514,7 +583,7 @@ class CredentialCollectionEnd:
         Parameters:
             req: falcon.Request HTTP request
             rep: falcon.Response HTTP response
-            name (str): human readable alias for AID to use as issuer
+            name (str): human readable alias or prefix for AID to use as issuer
 
         ---
         summary: Perform credential issuance
@@ -523,11 +592,11 @@ class CredentialCollectionEnd:
            - Credentials
         parameters:
           - in: path
-            name: alias
+            name: alias or prefix
             schema:
               type: string
             required: true
-            description: Human readable alias for the identifier to create
+            description: Human readable alias or prefix for the identifier to create
         requestBody:
             required: true
             content:
@@ -576,9 +645,9 @@ class CredentialCollectionEnd:
         agent = req.context.agent
 
         body = req.get_media()
-        hab = agent.hby.habByName(name)
+        hab = agent.hby.habs[name] if name in agent.hby.habs else agent.hby.habByName(name)
         if hab is None:
-            raise falcon.HTTPNotFound(description="name is not a valid reference to an identifier")
+            raise falcon.HTTPNotFound(description=f"{name} is not a valid reference to an identifier")
         try: 
             creder = serdering.SerderACDC(sad=httping.getRequiredParam(body, "acdc"))
             iserder = serdering.SerderKERI(sad=httping.getRequiredParam(body, "iss"))
@@ -604,7 +673,7 @@ class CredentialCollectionEnd:
             agent.credentialer.validate(creder)
             agent.registrar.issue(regk, iserder, anc)
             agent.credentialer.issue(creder=creder, serder=iserder)
-            op = agent.monitor.submit(hab.kever.prefixer.qb64, longrunning.OpTypes.credential,
+            op = agent.monitor.submit(creder.said, longrunning.OpTypes.credential,
                                       metadata=dict(ced=creder.sad, depends=op))
 
         except kering.ConfigurationError as e:
@@ -656,16 +725,16 @@ class CredentialResourceEnd:
         """
         agent = req.context.agent
         accept = req.get_header("accept")
-        if accept == "application/json+cesr":
-            rep.content_type = "application/json+cesr"
-            data = CredentialResourceEnd.outputCred(agent.hby, agent.rgy, said)
-        else:
-            rep.content_type = "application/json"
-            creds = agent.rgy.reger.cloneCreds([coring.Saider(qb64=said)], db=agent.hby.db)
-            if not creds:
-                raise falcon.HTTPNotFound(description=f"credential for said {said} not found.")
-
-            data = json.dumps(creds[0]).encode("utf-8")
+        try:
+            if accept == "application/json+cesr":
+                rep.content_type = "application/json+cesr"
+                data = CredentialResourceEnd.outputCred(agent.hby, agent.rgy, said)
+            else:
+                rep.content_type = "application/json"
+                creds = agent.rgy.reger.cloneCreds([coring.Saider(qb64=said)], db=agent.hby.db)
+                data = json.dumps(creds[0]).encode("utf-8")
+        except kering.MissingEntryError:
+            raise falcon.HTTPNotFound(description=f"credential for said {said} not found.")
 
         rep.status = falcon.HTTP_200
         rep.data = bytes(data)
@@ -720,6 +789,57 @@ class CredentialResourceEnd:
 
         return out
 
+    @staticmethod
+    def on_delete(req, rep, said):
+        """ Credentials DELETE endpoint
+
+        Parameters:
+            req: falcon.Request HTTP request
+            rep: falcon.Response HTTP response
+            said (str): SAID of credential to delete
+
+        ---
+        summary: Delete a credential from the database
+        description: Delete a credential from the database and remove any associated indices
+        tags:
+           - Credentials
+        parameters:
+           - in: path
+             name: said
+             schema:
+               type: string
+             required: true
+             description: SAID of credential to delete
+        responses:
+           204:
+              description: Credential deleted successfully
+           400:
+             description: The requested credential was not found
+        """
+        agent = req.context.agent
+        reger = agent.rgy.reger
+
+        try:
+            creder, _, _, _ = reger.cloneCred(said)
+        except kering.MissingEntryError:
+            raise falcon.HTTPNotFound(description=f"credential for said {said} not found.")
+
+        agent.seeker.unindex(said)
+
+        saider = coring.Saider(qb64b=said)
+        if not isinstance(creder.attrib, str) and 'i' in creder.attrib:
+            subj = creder.attrib["i"]
+            if subj:
+                reger.subjs.rem(keys=subj, val=saider)
+
+        reger.schms.rem(keys=creder.sad["s"], val=saider)
+        reger.issus.rem(keys=creder.sad["i"], val=saider)
+        reger.saved.rem(keys=said)
+        reger.creds.rem(keys=said)
+        reger.cancs.rem(keys=said)
+
+        rep.status = falcon.HTTP_204
+
 
 class CredentialResourceDeleteEnd:
     def __init__(self, identifierResource):
@@ -737,7 +857,7 @@ class CredentialResourceDeleteEnd:
         Parameters:
             req: falcon.Request HTTP request
             rep: falcon.Response HTTP response
-            name (str): human readable alias for AID to use as issuer
+            name (str): human readable alias or prefix for AID to use as issuer
             said (str): SAID of credential to revoke
 
         RequestBody:
@@ -752,11 +872,11 @@ class CredentialResourceDeleteEnd:
          - Credentials
         parameters:
         - in: path
-          name: name
+          name: name or prefix
           schema:
             type: string
           required: true
-          description: The human-readable alias for the AID to use as issuer.
+          description: The human-readable alias or prefix for the AID to use as issuer.
         - in: path
           name: said
           schema:
@@ -795,9 +915,9 @@ class CredentialResourceDeleteEnd:
         agent = req.context.agent
 
         body = req.get_media()
-        hab = agent.hby.habByName(name)
+        hab = agent.hby.habs[name] if name in agent.hby.habs else agent.hby.habByName(name)
         if hab is None:
-            raise falcon.HTTPNotFound(description="name is not a valid reference to an identifier")
+            raise falcon.HTTPNotFound(description=f"{name} is not a valid reference to an identifier")
 
         rserder = serdering.SerderKERI(sad=httping.getRequiredParam(body, "rev"))
 
@@ -824,6 +944,58 @@ class CredentialResourceDeleteEnd:
 
         rep.status = falcon.HTTP_200
         rep.data = op.to_json().encode("utf-8")
+
+
+class CredentialRegistryResourceEnd:
+    @staticmethod
+    def on_get(req, rep, ri, vci):
+        """ Get credential registry state
+
+        Parameters:
+            req: falcon.Request HTTP request
+            rep: falcon.Response HTTP response
+
+        ---
+        summary: Get credential registry state
+        description: Get credential registry state from any known Tever (does not need be controlled by us)
+        tags:
+           - Credentials
+        parameters:
+           - in: path
+             name: ri
+             schema:
+               type: string
+             required: true
+             description: SAID of management TEL
+           - in: path
+             name: vci
+             schema:
+               type: string
+             required: true
+             description: SAID of credential
+        responses:
+           200:
+              description: Credential registry state
+              content:
+                  application/json:
+                    schema:
+                        description: Credential registry state
+                        type: object
+           404:
+              description: Unknown management registry or credential
+        """
+        agent = req.context.agent
+        if ri not in agent.tvy.tevers:
+            raise falcon.HTTPNotFound(description=f"registry {ri} not found")
+        tever = agent.tvy.tevers[ri]
+
+        state = tever.vcState(vci)
+        if not state:
+            raise falcon.HTTPNotFound(description=f"credential {vci} not found in registry {ri}")
+
+        rep.status = falcon.HTTP_200
+        rep.content_type = "application/json"
+        rep.data = json.dumps(asdict(state)).encode("utf-8")
 
 
 def signPaths(hab, pather, sigers):

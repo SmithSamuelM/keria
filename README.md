@@ -14,7 +14,7 @@ Here we detail the components of a single KERIA instance. This architecture prot
 ### Message Router
 The Message Router receives external KERI protocol messages. These are KERI protocol messages for instance coordinating multi-sig, revoking credentials, etc. It routes these messages to the appropriate Agent(s). For instance a multisig message requires asynchronous waiting (for signature responses from other participants) and the message router would route those incoming KERI protocol responses to the appropriate agents.
 From Signify client calls, this service endpoint corresponds to the *http port* (default is 3902).
-This enpoint allows all KERI clients (not just Signify) to interact in a seamless way.
+This endpoint allows all KERI clients (not just Signify) to interact in a seamless way.
 
 ### The Agency
 The Agency receives API requests (/boot requests) to provision agents. It is the central repository for initializing agents. 
@@ -36,7 +36,7 @@ All Agent db access is through the associated Agent.
 
 ### Setup
 
-* Ensure [Python](https://www.python.org/downloads/) `version 3.12.14+` is installed
+* Ensure [Python](https://www.python.org/downloads/) `version 3.12.2+` is installed
 * Install [Keripy dependency](https://github.com/WebOfTrust/keripy#dependencies) (`libsodium 1.0.18+`)
 
 
@@ -67,10 +67,23 @@ All Agent db access is through the associated Agent.
     ```
 
 #### Run with docker
-* Specify an entrypoint with proper configuration, for instance if you want to use the demo-witness-oobis that is under the scripts/keri/cf dir:
+
+* The easiest way to configure a keria container is with environment variables. See below example for a working docker-compose configuration
+
+```yaml
+services:
+    keria:
+        image: weboftrust/keria:latest
+        environment:
+            KERI_AGENT_CORS: 1
+            KERIA_CURLS: http://<keria-hostname>:3902/
+            KERIA_IURLS: http://<witness-demo-hostname>:5642/oobi/BBilc4-L3tFUnfM_wJr4S4OJanAv_VmF_dJNN6vkf2Ha;http://<witness-demo-hostname>:5643/oobi/BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM
+        ports:
+            - 3901:3901
+            - 3902:3902
+            - 3903:3903
 ```
-ENTRYPOINT ["keria", "start",  "--config-file", "demo-witness-oobis", "--config-dir", "./scripts"]
-```
+
 You can see a [working example here](https://github.com/WebOfTrust/signify-ts/blob/main/docker-compose.yaml).
 
 ### Running Tests
@@ -85,3 +98,17 @@ You can see a [working example here](https://github.com/WebOfTrust/signify-ts/bl
       pytest tests/
     ```
 
+## Publishing containers
+
+Enable the containerd image store
+
+The containerd image store isn't enabled by default. To enable the feature for Docker Desktop:
+
+Navigate to Settings in Docker Desktop.
+In the General tab, check Use containerd for pulling and storing images.
+Select Apply & Restart.
+
+```shell
+make build-keri
+make publish-keri
+```

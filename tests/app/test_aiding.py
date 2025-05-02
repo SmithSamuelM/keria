@@ -10,6 +10,7 @@ from dataclasses import asdict
 import json
 import os
 import pytest
+from datetime import datetime
 
 import falcon
 from falcon import testing
@@ -52,6 +53,8 @@ def test_load_ends(helpers):
         assert isinstance(end, aiding.EndRoleCollectionEnd)
         (end, *_) = app._router.find("/identifiers/NAME/endroles/witness/EID")
         assert isinstance(end, aiding.EndRoleResourceEnd)
+        (end, *_) = app._router.find("/identifiers/NAME/locschemes")
+        assert isinstance(end, aiding.LocSchemeCollectionEnd)
         (end, *_) = app._router.find("/challenges")
         assert isinstance(end, aiding.ChallengeCollectionEnd)
         (end, *_) = app._router.find("/challenges/NAME")
@@ -135,6 +138,64 @@ def test_endrole_ends(helpers):
         assert ends[0] == {'cid': 'EHgwVwQT15OJvilVvW57HE4w0-GPs_Stj2OFoAHZSysY',
                            'role': 'agent',
                            'eid': 'EI7AkI40M11MS7lkTCb10JC9-nDt-tXwQh44OHAFlv_9'}
+
+
+def test_locscheme_ends(helpers, mockHelpingNowUTC):
+    with helpers.openKeria() as (agency, agent, app, client):
+        locSchemesEnd = aiding.LocSchemeCollectionEnd()
+        app.add_route("/identifiers/{name}/locschemes", locSchemesEnd)
+        end = aiding.IdentifierCollectionEnd()
+        app.add_route("/identifiers", end)
+
+        salt = b'0123456789abcdef'
+        op = helpers.createAid(client, "user1", salt)
+        aid = op["response"]
+        recp = aid['i']
+        assert recp == "EHgwVwQT15OJvilVvW57HE4w0-GPs_Stj2OFoAHZSysY"
+
+        rpy = helpers.locscheme(recp, "http://testurl.com")
+        sigs = ["AACOFnUk-lsVq0rLNdWCBtr51fnkXRdEzo8gnUwYF0F6xJPGL9_MXxezBc_P6e15-M1GpaHua_l3Hn4qKRMomRoM"]
+        body = dict(rpy=rpy.ked, sigs=sigs)
+
+        res = client.simulate_post(path=f"/identifiers/unknown-user/locschemes", json=body)
+        assert res.status_code == 404
+        assert res.json == {'description': 'invalid alias or prefix unknown-user',
+                            'title': '404 Not Found'}
+
+        res = client.simulate_post(path=f"/identifiers/user1/locschemes", json=body)
+        assert res.status_code == 400
+        assert res.json == {'description': 'unable to verify end role reply message',
+                            'title': '400 Bad Request'}
+
+        sigs = helpers.sign(salt, 0, 0, rpy.raw)
+        body = dict(rpy=rpy.ked, sigs=sigs)
+        res = client.simulate_post(path=f"/identifiers/user1/locschemes", json=body)
+        assert res.status_code == 202
+        op = res.json
+        assert op["done"]
+
+        keys = (recp, "http")
+        loc = agent.hby.db.locs.get(keys=keys)
+        assert loc is not None
+        assert loc.url == "http://testurl.com"
+
+        lans = agent.hby.db.lans.get(keys=keys)
+        assert lans is not None
+        assert lans.qb64 == "EEnRKmN-5cRGkGEfS0Z8VDIECsD8DBMNPpHWFBW8CO4p"
+
+        # https
+        rpy = helpers.locscheme(recp, "https://testurl.com", "https")
+        sigs = helpers.sign(salt, 0, 0, rpy.raw)
+        body = dict(rpy=rpy.ked, sigs=sigs)
+        res = client.simulate_post(path=f"/identifiers/user1/locschemes", json=body)
+        assert res.status_code == 202
+        op = res.json
+        assert op["done"]
+
+        keys = (recp, "https")
+        loc = agent.hby.db.locs.get(keys=keys)
+        assert loc is not None
+        assert loc.url == "https://testurl.com"
 
 
 def test_agent_resource(helpers, mockHelpingNowUTC):
@@ -257,6 +318,7 @@ def test_identifier_collection_end(helpers):
         app.add_route("/identifiers", end)
         app.add_route("/identifiers/{name}", resend)
         app.add_route("/identifiers/{name}/events", resend)
+        app.add_route("/identifiers/{name}/submit", resend)
 
         groupEnd = aiding.GroupMemberCollectionEnd()
         app.add_route("/identifiers/{name}/members", groupEnd)
@@ -449,6 +511,16 @@ def test_identifier_collection_end(helpers):
         res = client.simulate_get(path=f"/identifiers/aid1")
         mhab = res.json
         agent0 = mhab["state"]
+        
+        # Try to resubmit with the proper endpoint, w/ witnesses
+        submitBody = {"submit": "aid3"}
+        res = client.simulate_post(
+            path=f"/identifiers/{body['name']}/submit", body=json.dumps(submitBody)
+        )
+        assert res.status_code == 200
+        assert res.json["metadata"]["alias"] == "aid3"
+        assert res.json["metadata"]["sn"] == 0
+        assert res.json["name"] == "submit.EIsavDv6zpJDPauh24RSCx00jGc6VMe3l84Y8pPS8p-1"
 
         # rotate aid3
         salter = core.Salter(raw=salt)
@@ -847,7 +919,7 @@ def test_identifier_collection_end(helpers):
                 }
         res = client.simulate_post(path="/identifiers/randybad/events", body=json.dumps(body))
         assert res.status_code == 404
-        assert res.json == {'title': 'No AID with name randybad found'}
+        assert res.json == {'title': 'No AID with name or prefix randybad found'}
 
         body = {
             'sigs': sigers,
@@ -1322,9 +1394,13 @@ def test_identifier_resource_end(helpers):
 
         res = client.simulate_get(path="/identifiers/bad")
         assert res.status_code == 404
-        assert res.json == {'description': 'bad is not a valid identifier name', 'title': '404 Not Found'}
+        assert res.json == {'description': 'bad is not a valid identifier name or prefix', 'title': '404 Not Found'}
 
         res = client.simulate_get(path="/identifiers/aid1")
+        assert res.status_code == 200
+        assert res.json['prefix'] == 'EHgwVwQT15OJvilVvW57HE4w0-GPs_Stj2OFoAHZSysY'
+
+        res = client.simulate_get(path="/identifiers/EHgwVwQT15OJvilVvW57HE4w0-GPs_Stj2OFoAHZSysY")
         assert res.status_code == 200
         assert res.json['prefix'] == 'EHgwVwQT15OJvilVvW57HE4w0-GPs_Stj2OFoAHZSysY'
 
@@ -1357,6 +1433,16 @@ def test_oobi_ends(helpers):
         assert res.json == {'oobis': [], 'role': 'agent'}
 
         rpy = helpers.endrole(iserder.pre, agent.agentHab.pre)
+
+        # first try with bad signatures
+        sigs = helpers.sign(b'0123456789xyzxyz', 0, 0, rpy.raw)
+        body = dict(rpy=rpy.ked, sigs=sigs)
+        res = client.simulate_post(path=f"/identifiers/pal/endroles", json=body)
+        assert res.status_code == 400
+        assert res.json == {'description': "unable to verify end role reply message",
+                            'title': '400 Bad Request'}
+
+        # now with correct
         sigs = helpers.sign(salt, 0, 0, rpy.raw)
         body = dict(rpy=rpy.ked, sigs=sigs)
 
@@ -1372,6 +1458,7 @@ def test_oobi_ends(helpers):
 
         res = client.simulate_post(path=f"/endroles/pal", json=body)
         assert res.status_code == 404
+
 
         # must be a valid aid alias
         res = client.simulate_get("/identifiers/bad/oobis")
@@ -1609,6 +1696,9 @@ def test_rotation(helpers):
         assert aid["name"] == "aid1"
         assert aid["prefix"] == "EHgwVwQT15OJvilVvW57HE4w0-GPs_Stj2OFoAHZSysY"
 
+        icp_dt = aid["icp_dt"]
+        datetime.fromisoformat(icp_dt)  # will raise an error if the format is not a valid iso dt
+
         serder2, signers2 = helpers.incept(salt, "signify:aid", pidx=1, count=3)
         sigers2 = [signer.sign(ser=serder2.raw, index=0).qb64 for signer in signers2]
 
@@ -1701,6 +1791,11 @@ def test_rotation(helpers):
         assert res.json['done'] is True
 
         res = client.simulate_get(path=f"/identifiers/{aid1['name']}")
+        assert res.status_code == 200
+
+        # Ensure rotation doesn't change dt
+        assert res.json["icp_dt"] == icp_dt
+
         mhab = res.json
         agent0 = mhab["state"]
 

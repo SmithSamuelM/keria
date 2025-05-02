@@ -323,8 +323,8 @@ class Helpers:
         return httpServerDoer
 
     @staticmethod
-    def controller():
-        serder, signers = Helpers.incept(bran=b'0123456789abcdefghijk', stem="signify:controller", pidx=0)
+    def controller(bran=b'0123456789abcdefghijk'):
+        serder, signers = Helpers.incept(bran=bran, stem="signify:controller", pidx=0)
         sigers = [signers[0].sign(ser=serder.raw, index=0)]
         return serder, sigers
 
@@ -541,6 +541,11 @@ class Helpers:
         return eventing.reply(route="/end/role/add", data=data)
 
     @staticmethod
+    def locscheme(eid, url, scheme="http"):
+        data = dict(eid=eid, url=url, scheme=scheme)
+        return eventing.reply(route="/loc/scheme", data=data)
+
+    @staticmethod
     def middleware(agent):
         return MockAgentMiddleware(agent=agent)
 
@@ -599,6 +604,26 @@ class Helpers:
     def mockRandomNonce():
         return "A9XfpxIl1LcIkMhUSCCC8fgvkuX8gG9xK3SM-S8a8Y_U"
 
+    @staticmethod
+    def witnessMsg(hab, msg, sn, witHabs):
+        rctMsgs = []
+        for i, witHab in enumerate(witHabs):
+            kvy = witHab.kvy
+            witHab.psr.parse(ims=bytearray(msg), kvy=kvy, local=True)
+            # accepted event with cam sigs since own witness
+            assert kvy.kevers[hab.pre].sn == sn
+            assert len(kvy.cues) >= 1  # at least queued receipt cue
+            # better to find receipt cue in cues exactly
+            rctMsg = witHab.processCues(kvy.cues)  # process cue returns rct msg
+            assert len(rctMsg) > len(msg)
+            rctMsgs.append(rctMsg)
+
+        for rMsg in rctMsgs:  # process rct msgs from all witnesses
+            hab.psr.parse(ims=bytearray(rMsg), kvy=hab.kvy, local=True)
+        for whab in witHabs:
+            assert whab.pre in hab.kvy.kevers
+
+        return rctMsgs
 
 class Issuer:
     LE = "ENTAoj2oNBFpaniRswwPcca9W1ElEeH2V7ahw68HV4G5"
